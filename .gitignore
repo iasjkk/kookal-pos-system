@@ -1,0 +1,38 @@
+@'
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.*
+!.env.example
+.clasp.json
+.clasprc.json
+*.db
+*.sqlite
+*.sqlite3
+*.log
+logs/
+backups/
+BACKUPS/
+.DS_Store
+Thumbs.db
+'@ | Set-Content "$target\.gitignore"
+
+@'
+
+# Local databases and SQLite files
+server/data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# TypeScript generated files
+*.tsbuildinfo
+
+# Local Google Apps Script configuration
+.clasp.json
+.clasprc.json
+'@ | Add-Content .gitignore
