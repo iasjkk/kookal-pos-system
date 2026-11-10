@@ -6,8 +6,6 @@ import axios, {
   InternalAxiosRequestConfig,
 } from "axios";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
-
 const BRIDGE_TIMEOUT = 30000;
 
 type BridgeMessage = {
@@ -27,79 +25,18 @@ type PendingRequest = {
   timeout: ReturnType<typeof setTimeout>;
 };
 
-let bridgeFrame: HTMLIFrameElement | null = null;
-let bridgeReady = false;
-let bridgeInitializing = false;
-
 const pendingRequests = new Map<string, PendingRequest>();
-const waitingRequests: Array<() => void> = [];
-
-function initializeBridge(): void {
-  if (bridgeFrame || bridgeInitializing) return;
-
-  if (!API_BASE_URL) {
-    throw new Error(
-      "VITE_API_BASE_URL is not configured. Set it to your Apps Script /exec URL."
-    );
-  }
-
-  bridgeInitializing = true;
-
-  const bridgeUrl = new URL(API_BASE_URL);
-  bridgeUrl.searchParams.set("bridge", "1");
-
-  const frame = document.createElement("iframe");
-
-  frame.style.display = "none";
-  frame.setAttribute("aria-hidden", "true");
-  frame.src = bridgeUrl.toString();
-
-  bridgeFrame = frame;
-
-  window.addEventListener("message", handleBridgeMessage);
-
-  frame.onerror = () => {
-    bridgeReady = false;
-    bridgeInitializing = false;
-    rejectWaitingRequests("Unable to load the KOOKAL Apps Script bridge.");
-  };
-
-  document.body.appendChild(frame);
-}
-
-function rejectWaitingRequests(message: string): void {
-  while (waitingRequests.length) {
-    const request = waitingRequests.shift();
-    if (request) request();
-  }
-}
 
 function handleBridgeMessage(event: MessageEvent): void {
-  if (!bridgeFrame || event.source !== bridgeFrame.contentWindow) {
-    return;
-  }
+  if (event.source !== window.parent) return;
 
   const message = event.data as BridgeMessage;
 
   if (!message || typeof message !== "object") return;
-
-  if (message.type === "KOOKAL_BRIDGE_READY") {
-    bridgeReady = true;
-    bridgeInitializing = false;
-
-    while (waitingRequests.length) {
-      const request = waitingRequests.shift();
-      if (request) request();
-    }
-
-    return;
-  }
-
-  if (message.type !== "KOOKAL_BRIDGE_RESPONSE" || !message.id) {
-    return;
-  }
+  if (message.type !== "KOOKAL_BRIDGE_RESPONSE" || !message.id) return;
 
   const pending = pendingRequests.get(message.id);
+
   if (!pending) return;
 
   clearTimeout(pending.timeout);
@@ -131,7 +68,11 @@ function handleBridgeMessage(event: MessageEvent): void {
   }
 }
 
-function getRequestPayload(config: InternalAxiosRequestConfig) {
+window.addEventListener("message", handleBridgeMessage);
+
+function getRequestPayload(
+  config: InternalAxiosRequestConfig
+): Record<string, unknown> {
   let payload: Record<string, unknown> = {};
 
   if (config.data) {
@@ -150,6 +91,7 @@ function getRequestPayload(config: InternalAxiosRequestConfig) {
   }
 
   const headers = config.headers;
+
   const authorization =
     headers?.get?.("Authorization") ||
     headers?.Authorization ||
@@ -170,94 +112,71 @@ function sendBridgeRequest(
   config: InternalAxiosRequestConfig
 ): Promise<AxiosResponse> {
   return new Promise((resolve, reject) => {
-    const execute = () => {
-      if (!bridgeFrame?.contentWindow || !bridgeReady) {
-        reject(new Error("KOOKAL bridge is not ready."));
-        return;
-      }
+    const requestId =
+      "kookal_" +
+      Date.now().toString(36) +
+      "_" +
+      Math.random().toString(36).slice(2);
 
-      const requestId =
-        "kookal_" +
-        Date.now().toString(36) +
-        "_" +
-        Math.random().toString(36).slice(2);
+    let requestUrl: URL;
 
-      let requestUrl: URL;
+    try {
+      requestUrl = new URL(config.url || "/", window.location.origin);
+    } catch {
+      reject(new Error("Invalid API request URL."));
+      return;
+    }
 
-      try {
-        requestUrl = new URL(config.url || "/", "https://kookal.local");
-      } catch {
-        reject(new Error("Invalid API request URL."));
-        return;
-      }
+    const path = requestUrl.pathname;
+    const params = new URLSearchParams();
 
-      const path = requestUrl.pathname;
-
-      const params = new URLSearchParams();
-
-      if (config.params) {
-        Object.entries(config.params).forEach(([key, value]) => {
-          if (value !== undefined && value !== null) {
-            params.set(key, String(value));
-          }
-        });
-      }
-
-      requestUrl.searchParams.forEach((value, key) => {
-        params.set(key, value);
+    if (config.params) {
+      Object.entries(config.params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+          params.set(key, String(value));
+        }
       });
+    }
 
-      const payload: Record<string, any> = getRequestPayload(config);
+    requestUrl.searchParams.forEach((value, key) => {
+      params.set(key, value);
+    });
 
-      params.forEach((value, key) => {
-        payload[key] = value;
-      });
+    const payload = getRequestPayload(config);
 
-      const timeout = setTimeout(() => {
-        pendingRequests.delete(requestId);
+    params.forEach((value, key) => {
+      payload[key] = value;
+    });
 
-        reject(
-          new AxiosError(
-            "KOOKAL API request timed out.",
-            AxiosError.ETIMEDOUT,
-            config
-          )
-        );
-      }, BRIDGE_TIMEOUT);
+    const timeout = setTimeout(() => {
+      pendingRequests.delete(requestId);
 
-      pendingRequests.set(requestId, {
-        resolve,
-        reject,
-        config,
-        timeout,
-      });
-
-      bridgeFrame.contentWindow.postMessage(
-        {
-          type: "KOOKAL_BRIDGE_REQUEST",
-          id: requestId,
-          method: (config.method || "GET").toUpperCase(),
-          path,
-          payload,
-        },
-        "*"
+      reject(
+        new AxiosError(
+          "KOOKAL API request timed out.",
+          AxiosError.ETIMEDOUT,
+          config
+        )
       );
-    };
+    }, BRIDGE_TIMEOUT);
 
-    if (!bridgeFrame) {
-      try {
-        initializeBridge();
-      } catch (error) {
-        reject(error);
-        return;
-      }
-    }
+    pendingRequests.set(requestId, {
+      resolve,
+      reject,
+      config,
+      timeout,
+    });
 
-    if (bridgeReady) {
-      execute();
-    } else {
-      waitingRequests.push(execute);
-    }
+    window.parent.postMessage(
+      {
+        type: "KOOKAL_BRIDGE_REQUEST",
+        id: requestId,
+        method: (config.method || "GET").toUpperCase(),
+        path,
+        payload,
+      },
+      "*"
+    );
   });
 }
 
@@ -265,10 +184,17 @@ const bridgeAdapter: AxiosAdapter = async (config) => {
   return sendBridgeRequest(config);
 };
 
-export const api = axios.create({
-  adapter: bridgeAdapter,
-  timeout: BRIDGE_TIMEOUT,
-});
+export const api = axios.create(
+  import.meta.env.PROD
+    ? {
+        adapter: bridgeAdapter,
+        timeout: BRIDGE_TIMEOUT,
+      }
+    : {
+        baseURL: "/api",
+        timeout: BRIDGE_TIMEOUT,
+      }
+);
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("kookal_token");
@@ -299,4 +225,17 @@ export const money = (v: number) =>
     maximumFractionDigits: 2,
   }).format(Number(v || 0));
 
-export const today = () => new Date().toISOString().slice(0, 10);
+export const today = () => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const values = Object.fromEntries(
+    parts.map((part) => [part.type, part.value])
+  );
+
+  return `${values.year}-${values.month}-${values.day}`;
+};

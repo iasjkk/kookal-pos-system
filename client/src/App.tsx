@@ -1,7 +1,7 @@
 import {useEffect,useMemo,useState} from "react";
 import {api,money,today} from "./api";
 import {LayoutDashboard,Receipt,Utensils,Users,ChartNoAxesCombined,LogOut,Plus,Printer,Trash2,Search,Leaf,Menu as MenuIcon,X,RefreshCw,ShieldCheck,Clock3} from "lucide-react";
-
+const logoUrl = `${import.meta.env.BASE_URL}kookal-logo.png`;
 type User={id:number;username:string;full_name:string;role:"admin"|"manager"|"cashier"};
 type Item={id:number;category_id:number;category_name:string;meal_period_id:number;name:string;description:string;price:number;gst_rate:number;gst_inclusive:number};
 type Bill={id:number;bill_no:string;customer_name:string;order_type:string;table_no:string;subtotal:number;discount:number;tax_total:number;grand_total:number;payment_method:string;status:string;created_at:string;items:any[];cashier_name:string;cancel_reason?:string};
@@ -39,7 +39,7 @@ export default function App(){
  ].filter(n=>n.roles.includes(user.role));
  return <div className="app-shell">
   <aside className={`sidebar ${mobileNav?"show":""}`}>
-   <div className="brand"><img src="/kookal-logo.png"/><div><b>KOOKAL</b><span>FARM & KITCHEN</span></div><button className="mobile-close" onClick={()=>setMobileNav(false)}><X/></button></div>
+   <div className="brand"><img src={logoUrl} alt="KOOKAL logo" /><div><b>KOOKAL</b><span>FARM & KITCHEN</span></div><button className="mobile-close" onClick={()=>setMobileNav(false)}><X/></button></div>
    <div className="side-label">WORKSPACE</div>
    {nav.map(n=><button key={n.id} className={`nav-link ${page===n.id?"active":""}`} onClick={()=>{setPage(n.id);setMobileNav(false)}}><n.icon size={18}/>{n.label}</button>)}
    <div className="sidebar-bottom"><div className="user-chip"><div className="avatar">{user.full_name.slice(0,1).toUpperCase()}</div><div className="user-meta"><b>{user.full_name}</b><span>{roleName(user.role)}</span></div></div><button className="nav-link logout" onClick={logout}><LogOut size={18}/>Sign out</button></div>
@@ -106,7 +106,7 @@ function Login({ onLogin }: { onLogin: (t: string, u: User) => void }) {
     <div className="login-page">
       <div className="login-card">
         <div className="login-brand">
-          <img src="/kookal-logo.png" alt="KOOKAL logo" />
+          <img src={logoUrl} alt="KOOKAL logo" />
           <div className="eyebrow">FARM &amp; KITCHEN</div>
         </div>
 
@@ -190,7 +190,7 @@ function POS({user,notify,onCreated}:{user:User;notify:(s:string)=>void;onCreate
 function printReceipt(b:Bill,targetWindow?:Window|null){
  const w=targetWindow||window.open("","_blank","width=420,height=700"); if(!w){alert("Please allow pop-ups to print the receipt.");return;}
  const rows=b.items.map(i=>`<tr><td>${escapeHtml(i.item_name)}<small>${i.quantity} × ${money(i.unit_price)}</small></td><td>${money(i.line_total)}</td></tr>`).join("");
- w.document.write(`<!doctype html><html><head><title>${b.bill_no}</title><style>@page{size:80mm auto;margin:3mm}*{box-sizing:border-box}body{width:74mm;margin:0 auto;font:12px Arial,sans-serif;color:#111}header{text-align:center;padding:8px 0}header img{width:40mm;max-height:25mm;object-fit:contain}h2{font-size:16px;margin:5px}p{margin:3px 0}.rule{border-top:1px dashed #333;margin:8px 0}table{width:100%;border-collapse:collapse}td{padding:4px 0;vertical-align:top}td:last-child{text-align:right;white-space:nowrap}small{display:block;font-size:10px}.totals p{display:flex;justify-content:space-between}.grand{font-size:16px;font-weight:bold}.center{text-align:center}.muted{font-size:10px}</style></head><body><header><img src="/kookal-logo.png"><h2>KOOKAL – FARM & KITCHEN</h2><p>Food made with warmth</p></header><div class="rule"></div><p><b>Bill:</b> ${b.bill_no}</p><p><b>Date:</b> ${new Date(b.created_at).toLocaleString("en-IN")}</p><p><b>Cashier:</b> ${escapeHtml(b.cashier_name||"")}</p><p><b>Type:</b> ${b.order_type} ${b.table_no?`· Table ${escapeHtml(b.table_no)}`:""}</p>${b.customer_name?`<p><b>Customer:</b> ${escapeHtml(b.customer_name)}</p>`:""}<div class="rule"></div><table>${rows}</table><div class="rule"></div><div class="totals"><p><span>Subtotal</span><b>${money(b.subtotal)}</b></p><p><span>GST</span><b>${money(b.tax_total)}</b></p><p><span>Discount</span><b>${money(b.discount)}</b></p><p class="grand"><span>TOTAL</span><span>${money(b.grand_total)}</span></p><p><span>Payment</span><b>${b.payment_method}</b></p></div><div class="rule"></div><p class="center"><b>Thank you for visiting KOOKAL!</b></p><p class="center muted">We look forward to serving you again.</p><script>window.onload=()=>{window.print();window.onafterprint=()=>window.close()}</script></body></html>`);
+ w.document.write(`<!doctype html><html><head><title>${b.bill_no}</title><style>@page{size:80mm auto;margin:3mm}*{box-sizing:border-box}body{width:74mm;margin:0 auto;font:12px Arial,sans-serif;color:#111}header{text-align:center;padding:8px 0}header img{width:40mm;max-height:25mm;object-fit:contain}h2{font-size:16px;margin:5px}p{margin:3px 0}.rule{border-top:1px dashed #333;margin:8px 0}table{width:100%;border-collapse:collapse}td{padding:4px 0;vertical-align:top}td:last-child{text-align:right;white-space:nowrap}small{display:block;font-size:10px}.totals p{display:flex;justify-content:space-between}.grand{font-size:16px;font-weight:bold}.center{text-align:center}.muted{font-size:10px}</style></head><body><header><img src={logoUrl} alt="KOOKAL logo" /><h2>KOOKAL – FARM & KITCHEN</h2><p>Food made with warmth</p></header><div class="rule"></div><p><b>Bill:</b> ${b.bill_no}</p><p><b>Date:</b> ${new Date(b.created_at).toLocaleString("en-IN")}</p><p><b>Cashier:</b> ${escapeHtml(b.cashier_name||"")}</p><p><b>Type:</b> ${b.order_type} ${b.table_no?`· Table ${escapeHtml(b.table_no)}`:""}</p>${b.customer_name?`<p><b>Customer:</b> ${escapeHtml(b.customer_name)}</p>`:""}<div class="rule"></div><table>${rows}</table><div class="rule"></div><div class="totals"><p><span>Subtotal</span><b>${money(b.subtotal)}</b></p><p><span>GST</span><b>${money(b.tax_total)}</b></p><p><span>Discount</span><b>${money(b.discount)}</b></p><p class="grand"><span>TOTAL</span><span>${money(b.grand_total)}</span></p><p><span>Payment</span><b>${b.payment_method}</b></p></div><div class="rule"></div><p class="center"><b>Thank you for visiting KOOKAL!</b></p><p class="center muted">We look forward to serving you again.</p><script>window.onload=()=>{window.print();window.onafterprint=()=>window.close()}</script></body></html>`);
  w.document.close();
 }
 function escapeHtml(s:string){return String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]!))}
