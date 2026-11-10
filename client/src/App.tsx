@@ -14,7 +14,20 @@ export default function App(){
  const [mobileNav,setMobileNav]=useState(false);
  const notify=(s:string)=>{setToast(s);setTimeout(()=>setToast(""),3500)};
  const logout=()=>{localStorage.removeItem("kookal_token");localStorage.removeItem("kookal_user");setToken(null);setUser(null)};
- useEffect(()=>{if(token) api.get("/auth/me").catch(logout)},[]);
+ useEffect(() => {
+  if (!token) return;
+
+  let cancelled = false;
+
+  api.get("/auth/me")
+    .catch(() => {
+      if (!cancelled) logout();
+    });
+
+  return () => {
+    cancelled = true;
+  };
+}, [token]);
  if(!token||!user) return <Login onLogin={(t,u)=>{localStorage.setItem("kookal_token",t);localStorage.setItem("kookal_user",JSON.stringify(u));setToken(t);setUser(u)}}/>;
  const nav=[
   {id:"pos",label:"Billing POS",icon:Receipt,roles:["admin","manager","cashier"]},
@@ -47,11 +60,116 @@ export default function App(){
  </div>
 }
 
-function Login({onLogin}:{onLogin:(t:string,u:User)=>void}){
- const [username,setUsername]=useState("admin"),[password,setPassword]=useState(""),[error,setError]=useState(""),[busy,setBusy]=useState(false);
- async function submit(e:any){e.preventDefault();setBusy(true);setError("");try{const r=await api.post("/auth/login",{username,password});onLogin(r.data.token,r.data.user)}catch(e:any){setError(e.response?.data?.error||"Unable to connect to local server")}finally{setBusy(false)}}
- return <div className="login-page"><div className="login-card"><div className="login-brand"><img src="/kookal-logo.png"/><div className="eyebrow">FARM & KITCHEN</div></div><div className="login-heading"><span className="eyebrow">WELCOME BACK</span><h1>Good food begins<br/>with good hospitality.</h1><p>Sign in to manage your KOOKAL operations.</p></div><form onSubmit={submit}><label>Username</label><input value={username} onChange={e=>setUsername(e.target.value)} autoComplete="username" required/><label>Password</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password" required/>{error&&<div className="error">{error}</div>}<button className="btn primary full" disabled={busy}>{busy?"Signing in…":"Sign in to KOOKAL"}</button></form><div className="login-foot"><ShieldCheck size={15}/> Secure role-based access · Local database</div></div><div className="login-art"><div className="art-copy"><span>FROM FARM TO TABLE</span><h2>Rooted in nature.<br/>Made for gathering.</h2><p>Good food, warm moments, and a place to belong.</p></div></div></div>
+
+function Login({ onLogin }: { onLogin: (t: string, u: User) => void }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    if (!username.trim() || !password) {
+      setError("Please enter your username and password.");
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+
+    try {
+      const response = await api.post("/auth/login", {
+        username: username.trim(),
+        password,
+      });
+
+      const { token, user } = response.data || {};
+
+      if (!token || !user) {
+        throw new Error("Invalid login response from server.");
+      }
+
+      onLogin(token, user);
+    } catch (e: any) {
+      setError(
+        e.response?.data?.error ||
+        e.message ||
+        "Unable to connect to KOOKAL server."
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="login-page">
+      <div className="login-card">
+        <div className="login-brand">
+          <img src="/kookal-logo.png" alt="KOOKAL logo" />
+          <div className="eyebrow">FARM &amp; KITCHEN</div>
+        </div>
+
+        <div className="login-heading">
+          <span className="eyebrow">WELCOME BACK</span>
+          <h1>
+            Good food begins
+            <br />
+            with good hospitality.
+          </h1>
+          <p>Sign in to manage your KOOKAL operations.</p>
+        </div>
+
+        <form onSubmit={submit}>
+          <label>Username</label>
+          <input
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="username"
+            required
+          />
+
+          <label>Password</label>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            required
+          />
+
+          {error && <div className="error">{error}</div>}
+
+          <button
+            className="btn primary full"
+            type="submit"
+            disabled={busy}
+          >
+            {busy ? "Signing in..." : "Sign in to KOOKAL"}
+          </button>
+        </form>
+
+        <div className="login-foot">
+          <ShieldCheck size={15} />
+          Secure role-based access
+        </div>
+      </div>
+
+      <div className="login-art">
+        <div className="art-copy">
+          <span>FROM FARM TO TABLE</span>
+          <h2>
+            Rooted in nature.
+            <br />
+            Made for gathering.
+          </h2>
+          <p>Good food, warm moments, and a place to belong.</p>
+        </div>
+      </div>
+    </div>
+  );
 }
+
 
 function POS({user,notify,onCreated}:{user:User;notify:(s:string)=>void;onCreated:()=>void}){
  const [menu,setMenu]=useState<any>({periods:[],categories:[],items:[]}),[period,setPeriod]=useState<number|null>(null),[category,setCategory]=useState<number|null>(null);
@@ -98,20 +216,333 @@ function MenuAdmin({notify}:{notify:(s:string)=>void}){
  <div className="card"><span className="eyebrow">FOOD & BEVERAGE CATALOGUE</span><h2>Add menu item</h2><form className="stack-form" onSubmit={addItem}><label>Category</label><select value={item.category_id} onChange={e=>setItem({...item,category_id:e.target.value})} required><option value="">Choose category</option>{menu.categories.map((c:any)=><option key={c.id} value={c.id}>{menu.periods.find((p:any)=>p.id===c.meal_period_id)?.name} · {c.name}</option>)}</select><label>Item name</label><input placeholder="e.g. Farmhouse Pizza" value={item.name} onChange={e=>setItem({...item,name:e.target.value})} required/><label>Description (optional)</label><input placeholder="Short menu description" value={item.description} onChange={e=>setItem({...item,description:e.target.value})}/><div className="form-two"><div><label>Price (₹)</label><input type="number" min="0" step="0.01" value={item.price} onChange={e=>setItem({...item,price:e.target.value})} required/></div><div><label>GST rate (%)</label><select value={item.gst_rate} onChange={e=>setItem({...item,gst_rate:e.target.value})}>{["0","5","12","18","28"].map(v=><option key={v}>{v}</option>)}</select></div></div><label className="check-label"><input type="checkbox" checked={item.gst_inclusive} onChange={e=>setItem({...item,gst_inclusive:e.target.checked})}/> Price already includes GST</label><button className="btn primary"><Plus size={16}/> Save menu item</button></form><hr/><h2>Current menu items</h2><div className="table-wrap compact"><table><thead><tr><th>Item</th><th>Category</th><th>Price</th><th>GST</th></tr></thead><tbody>{menu.items.map((i:Item)=><tr key={i.id}><td><b>{i.name}</b></td><td>{i.category_name}</td><td>{money(i.price)}</td><td>{i.gst_rate}% {i.gst_inclusive?"incl.":"extra"}</td></tr>)}</tbody></table>{!menu.items.length&&<div className="empty">Add your first menu item above.</div>}</div></div></div>
 }
 
-function UsersAdmin({notify}:{notify:(s:string)=>void}){
- const [users,setUsers]=useState<any[]>([]),[form,setForm]=useState({full_name:"",username:"",password:"",role:"cashier"});
- const load=()=>api.get("/users").then(r=>setUsers(r.data));useEffect(()=>{load()},[]);
- async function add(e:any){e.preventDefault();try{await api.post("/users",form);setForm({full_name:"",username:"",password:"",role:"cashier"});notify("User account created");load()}catch(e:any){notify(e.response?.data?.error||"Could not create account")}}
- async function toggle(u:any){try{await api.patch(`/users/${u.id}/active`,{active:!u.active});notify("Account status updated");load()}catch(e:any){notify(e.response?.data?.error||"Update failed")}}
- return <div className="admin-grid"><div className="card"><span className="eyebrow">TEAM ACCESS</span><h2>Create staff account</h2><form className="stack-form" onSubmit={add}><label>Full name</label><input value={form.full_name} onChange={e=>setForm({...form,full_name:e.target.value})} required/><label>Username</label><input value={form.username} onChange={e=>setForm({...form,username:e.target.value})} minLength={3} required/><label>Temporary password</label><input type="password" value={form.password} onChange={e=>setForm({...form,password:e.target.value})} minLength={8} required/><label>Role</label><select value={form.role} onChange={e=>setForm({...form,role:e.target.value})}><option value="cashier">Cashier</option><option value="manager">Manager</option><option value="admin">Administrator</option></select><button className="btn primary"><Plus size={16}/> Create account</button></form><p className="hint">Passwords must be at least 8 characters. Share credentials privately and ask staff to keep them secure.</p></div><div className="card"><span className="eyebrow">ACTIVE ACCOUNTS</span><h2>Users & permissions</h2><div className="table-wrap"><table><thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Status</th><th></th></tr></thead><tbody>{users.map(u=><tr key={u.id}><td><b>{u.full_name}</b></td><td>{u.username}</td><td>{roleName(u.role)}</td><td><span className={`pill ${u.active?"green":"red"}`}>{u.active?"Active":"Inactive"}</span></td><td>{u.role!=="admin"&&<button className="btn tiny secondary" onClick={()=>toggle(u)}>{u.active?"Deactivate":"Activate"}</button>}</td></tr>)}</tbody></table></div></div></div>
+
+function UsersAdmin({ notify }: { notify: (s: string) => void }) {
+  const [users, setUsers] = useState<any[]>([]);
+  const [form, setForm] = useState({
+    full_name: "",
+    username: "",
+    password: "",
+    role: "cashier",
+  });
+
+  const load = async () => {
+    try {
+      const response = await api.get("/users");
+      setUsers(Array.isArray(response.data?.users) ? response.data.users : []);
+    } catch (error: any) {
+      notify(error.response?.data?.error || "Could not load users");
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function add(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+
+    try {
+      await api.post("/users", form);
+
+      setForm({
+        full_name: "",
+        username: "",
+        password: "",
+        role: "cashier",
+      });
+
+      notify("User account created");
+      await load();
+    } catch (error: any) {
+      notify(error.response?.data?.error || "Could not create account");
+    }
+  }
+
+  async function toggle(u: any) {
+    try {
+      await api.patch(`/users/${u.id}/active`, {
+        active: !u.active,
+      });
+
+      notify("Account status updated");
+      await load();
+    } catch (error: any) {
+      notify(error.response?.data?.error || "Update failed");
+    }
+  }
+
+  return (
+    <div className="admin-grid">
+      <div className="card">
+        <span className="eyebrow">TEAM ACCESS</span>
+        <h2>Create staff account</h2>
+
+        <form className="stack-form" onSubmit={add}>
+          <label>Full name</label>
+          <input
+            value={form.full_name}
+            onChange={(e) =>
+              setForm({ ...form, full_name: e.target.value })
+            }
+            required
+          />
+
+          <label>Username</label>
+          <input
+            value={form.username}
+            onChange={(e) =>
+              setForm({ ...form, username: e.target.value })
+            }
+            minLength={3}
+            required
+          />
+
+          <label>Temporary password</label>
+          <input
+            type="password"
+            value={form.password}
+            onChange={(e) =>
+              setForm({ ...form, password: e.target.value })
+            }
+            minLength={8}
+            required
+          />
+
+          <label>Role</label>
+          <select
+            value={form.role}
+            onChange={(e) =>
+              setForm({ ...form, role: e.target.value })
+            }
+          >
+            <option value="cashier">Cashier</option>
+            <option value="manager">Manager</option>
+            <option value="admin">Administrator</option>
+          </select>
+
+          <button className="btn primary" type="submit">
+            <Plus size={16} /> Create account
+          </button>
+        </form>
+
+        <p className="hint">
+          Passwords must be at least 8 characters. Share credentials
+          privately and ask staff to keep them secure.
+        </p>
+      </div>
+
+      <div className="card">
+        <span className="eyebrow">ACTIVE ACCOUNTS</span>
+        <h2>Users &amp; permissions</h2>
+
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Username</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th></th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {users.map((u) => (
+                <tr key={u.id}>
+                  <td><b>{u.full_name || "—"}</b></td>
+                  <td>{u.username}</td>
+                  <td>{roleName(u.role)}</td>
+                  <td>
+                    <span className={`pill ${u.active ? "green" : "red"}`}>
+                      {u.active ? "Active" : "Inactive"}
+                    </span>
+                  </td>
+                  <td>
+                    {u.role !== "admin" && (
+                      <button
+                        className="btn tiny secondary"
+                        type="button"
+                        onClick={() => toggle(u)}
+                      >
+                        {u.active ? "Deactivate" : "Activate"}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+
+              {users.length === 0 && (
+                <tr>
+                  <td colSpan={5}>No user accounts found.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
 }
 
-function Reports(){
- const [from,setFrom]=useState(today()),[to,setTo]=useState(today()),[data,setData]=useState<any>(null),[error,setError]=useState("");
- const load=()=>api.get("/reports/summary",{params:{from,to}}).then(r=>{setData(r.data);setError("")}).catch(e=>setError(e.response?.data?.error||"Unable to load report"));
- useEffect(()=>{load()},[]);
- return <div className="report-page"><div className="card report-filter"><div><span className="eyebrow">BUSINESS INTELLIGENCE</span><h2>Sales performance</h2></div><div className="date-filters"><label>From<input type="date" value={from} onChange={e=>setFrom(e.target.value)}/></label><label>To<input type="date" value={to} onChange={e=>setTo(e.target.value)}/></label><button className="btn primary" onClick={load}>Apply</button></div></div>{error&&<div className="error">{error}</div>}{data&&<><div className="stats-grid"><Stat label="Net sales" value={money(data.totals.sales)}/><Stat label="Total bills" value={data.totals.bill_count}/><Stat label="Average paid bill" value={money(data.average_bill)}/><Stat label="Cancelled bills" value={data.totals.cancelled}/><Stat label="GST collected" value={money(data.totals.tax)}/></div><div className="admin-grid"><div className="card"><h2>Payment breakdown</h2><DataTable heads={["Method","Bills","Amount"]} rows={data.payments.map((x:any)=>[x.payment_method,x.bills,money(x.amount)])}/></div><div className="card"><h2>Cashier performance</h2><DataTable heads={["Cashier","Bills","Sales"]} rows={data.byCashier.map((x:any)=>[x.full_name,x.bills,money(x.amount)])}/></div><div className="card"><h2>Top selling items</h2><DataTable heads={["Item","Qty","Sales"]} rows={data.byItem.map((x:any)=>[x.item_name,x.quantity,money(x.amount)])}/></div><div className="card"><h2>Daily sales</h2><DataTable heads={["Date","Bills","Sales"]} rows={data.daily.map((x:any)=>[x.day,x.bills,money(x.sales)])}/></div></div><button className="btn secondary" onClick={()=>exportCsv(data)}>Export report CSV</button></>}</div>
+
+
+function Reports() {
+  const [from, setFrom] = useState(today());
+  const [to, setTo] = useState(today());
+  const [data, setData] = useState<any>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const load = async () => {
+    if (!from || !to) {
+      setError("Please select both dates.");
+      return;
+    }
+
+    if (from > to) {
+      setError("From date cannot be later than To date.");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+
+    try {
+      const response = await api.get("/reports/summary", {
+        params: { from, to },
+      });
+
+      setData(response.data);
+    } catch (e: any) {
+      setError(
+        e.response?.data?.error || "Unable to load report"
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  return (
+    <div className="report-page">
+      <div className="card report-filter">
+        <div>
+          <span className="eyebrow">BUSINESS INTELLIGENCE</span>
+          <h2>Sales performance</h2>
+        </div>
+
+        <div className="date-filters">
+          <label>
+            From
+            <input
+              type="date"
+              value={from}
+              onChange={(e) => setFrom(e.target.value)}
+            />
+          </label>
+
+          <label>
+            To
+            <input
+              type="date"
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+            />
+          </label>
+
+          <button
+            className="btn primary"
+            type="button"
+            onClick={load}
+            disabled={loading}
+          >
+            {loading ? "Loading..." : "Apply"}
+          </button>
+        </div>
+      </div>
+
+      {error && <div className="error">{error}</div>}
+
+      {loading && <div className="card">Loading report...</div>}
+
+      {!loading && data && (
+        <>
+          <div className="stats-grid">
+            <Stat label="Net sales" value={money(data.totals?.sales)} />
+            <Stat label="Total bills" value={data.totals?.bill_count ?? 0} />
+            <Stat label="Average paid bill" value={money(data.average_bill)} />
+            <Stat label="Cancelled bills" value={data.totals?.cancelled ?? 0} />
+            <Stat label="GST collected" value={money(data.totals?.tax)} />
+          </div>
+
+          <div className="admin-grid">
+            <div className="card">
+              <h2>Payment breakdown</h2>
+              <DataTable
+                heads={["Method", "Bills", "Amount"]}
+                rows={(data.payments || []).map((x: any) => [
+                  x.payment_method,
+                  x.bills,
+                  money(x.amount),
+                ])}
+              />
+            </div>
+
+            <div className="card">
+              <h2>Cashier performance</h2>
+              <DataTable
+                heads={["Cashier", "Bills", "Sales"]}
+                rows={(data.byCashier || []).map((x: any) => [
+                  x.full_name,
+                  x.bills,
+                  money(x.amount),
+                ])}
+              />
+            </div>
+
+            <div className="card">
+              <h2>Top selling items</h2>
+              <DataTable
+                heads={["Item", "Qty", "Sales"]}
+                rows={(data.byItem || []).map((x: any) => [
+                  x.item_name,
+                  x.quantity,
+                  money(x.amount),
+                ])}
+              />
+            </div>
+
+            <div className="card">
+              <h2>Daily sales</h2>
+              <DataTable
+                heads={["Date", "Bills", "Sales"]}
+                rows={(data.daily || []).map((x: any) => [
+                  x.day,
+                  x.bills,
+                  money(x.sales),
+                ])}
+              />
+            </div>
+          </div>
+
+          <button
+            className="btn secondary"
+            type="button"
+            onClick={() => exportCsv(data)}
+          >
+            Export report CSV
+          </button>
+        </>
+      )}
+    </div>
+  );
 }
+
 function Stat({label,value}:{label:string;value:any}){return <div className="stat-card"><span>{label}</span><b>{value}</b></div>}
 function DataTable({heads,rows}:{heads:string[];rows:any[][]}){return <div className="table-wrap"><table><thead><tr>{heads.map(h=><th key={h}>{h}</th>)}</tr></thead><tbody>{rows.map((r,i)=><tr key={i}>{r.map((v,j)=><td key={j}>{v}</td>)}</tr>)}</tbody></table>{!rows.length&&<div className="empty">No data for this period.</div>}</div>}
 function exportCsv(d: any) {
@@ -150,4 +581,87 @@ function exportCsv(d: any) {
   a.click();
   URL.revokeObjectURL(a.href);
 }
-function Audit(){const [rows,setRows]=useState<any[]>([]);useEffect(()=>{api.get("/audit").then(r=>setRows(r.data))},[]);return <div className="card"><span className="eyebrow">ACCOUNTABILITY</span><h2>Recent activity</h2><div className="table-wrap"><table><thead><tr><th>Date & time</th><th>User</th><th>Action</th><th>Details</th></tr></thead><tbody>{rows.map(r=><tr key={r.id}><td>{new Date(r.created_at+"Z").toLocaleString("en-IN")}</td><td>{r.full_name||"System"}</td><td><span className="pill">{r.action}</span></td><td>{r.details}</td></tr>)}</tbody></table></div></div>}
+
+function Audit() {
+  const [rows, setRows] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const load = async () => {
+    try {
+      setError("");
+      const response = await api.get("/audit");
+      setRows(Array.isArray(response.data?.logs) ? response.data.logs : []);
+    } catch (err: any) {
+      setError(err.response?.data?.error || "Could not load activity logs");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  return (
+    <div className="card">
+      <span className="eyebrow">ACCOUNTABILITY</span>
+      <h2>Recent activity</h2>
+
+      {loading && <p className="hint">Loading activity...</p>}
+
+      {!loading && error && (
+        <div className="hint">
+          <p>{error}</p>
+          <button className="btn secondary" type="button" onClick={load}>
+            Retry
+          </button>
+        </div>
+      )}
+
+      {!loading && !error && (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date &amp; time</th>
+                <th>User</th>
+                <th>Action</th>
+                <th>Details</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id}>
+                  <td>
+                    {r.created_at
+                      ? new Date(
+                          /Z$|[+-]\d{2}:\d{2}$/.test(r.created_at)
+                            ? r.created_at
+                            : `${r.created_at}Z`
+                        ).toLocaleString("en-IN", {
+                          timeZone: "Asia/Kolkata",
+                        })
+                      : "—"}
+                  </td>
+                  <td>{r.full_name || "System"}</td>
+                  <td>
+                    <span className="pill">{r.action || "—"}</span>
+                  </td>
+                  <td>{r.details || "—"}</td>
+                </tr>
+              ))}
+
+              {rows.length === 0 && (
+                <tr>
+                  <td colSpan={4}>No activity recorded yet.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
