@@ -1,0 +1,82 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KOOKAL Backend Bridge</title>
+</head>
+
+<body>
+  <script>
+    (function () {
+      "use strict";
+
+      var ALLOWED_APP_ORIGIN = "https://iasjkk.github.io";
+
+      window.addEventListener("message", function (event) {
+        if (event.source !== window.parent) return;
+        if (event.origin !== ALLOWED_APP_ORIGIN) return;
+
+        var message = event.data || {};
+
+        if (message.type !== "KOOKAL_BRIDGE_REQUEST") return;
+        if (!message.id || typeof message.id !== "string") return;
+
+        var method = String(message.method || "GET").toUpperCase();
+        var path = String(message.path || "");
+
+        if (!["GET", "POST", "PATCH"].includes(method)) {
+          sendResponse(message.id, 405, {
+            error: "Method not allowed."
+          });
+          return;
+        }
+
+        var payload = message.payload || {};
+
+        if (
+          typeof payload !== "object" ||
+          payload === null ||
+          Array.isArray(payload)
+        ) {
+          sendResponse(message.id, 400, {
+            error: "Invalid request payload."
+          });
+          return;
+        }
+
+        google.script.run
+          .withSuccessHandler(function (result) {
+            sendResponse(
+              message.id,
+              result && result.status ? result.status : 200,
+              result ? result.body : null
+            );
+          })
+          .withFailureHandler(function (error) {
+            sendResponse(message.id, 500, {
+              error: error && error.message
+                ? error.message
+                : "Apps Script request failed."
+            });
+          })
+          .bridgeDispatch(method, path, payload);
+      });
+
+      function sendResponse(id, status, body) {
+        window.parent.postMessage(
+          {
+            type: "KOOKAL_BRIDGE_RESPONSE",
+            id: id,
+            status: status,
+            body: body
+          },
+          ALLOWED_APP_ORIGIN
+        );
+      }
+    })();
+  </script>
+</body>
+</html>

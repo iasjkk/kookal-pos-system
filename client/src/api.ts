@@ -7,6 +7,11 @@ import axios, {
 } from "axios";
 
 const BRIDGE_TIMEOUT = 30000;
+const BRIDGE_LOAD_TIMEOUT = 25000;
+
+const BRIDGE_URL = String(
+  import.meta.env.VITE_APPS_SCRIPT_BRIDGE_URL || ""
+).trim();
 
 type BridgeMessage = {
   type: string;
@@ -27,8 +32,113 @@ type PendingRequest = {
 
 const pendingRequests = new Map<string, PendingRequest>();
 
+let bridgeFrame: HTMLIFrameElement | null = null;
+let bridgeFramePromise: Promise<HTMLIFrameElement> | null = null;
+
+function getBridgeFrame(): Promise<HTMLIFrameElement> {
+  if (bridgeFramePromise) {
+    return bridgeFramePromise;
+  }
+
+  if (!BRIDGE_URL) {
+    return Promise.reject(
+      new Error(
+        "Apps Script bridge URL is missing. Configure VITE_APPS_SCRIPT_BRIDGE_URL."
+      )
+    );
+  }
+
+  let parsedUrl: URL;
+
+  try {
+    parsedUrl = new URL(BRIDGE_URL);
+
+    if (
+      parsedUrl.protocol !== "https:" ||
+      parsedUrl.hostname !== "script.google.com" ||
+      !parsedUrl.pathname.includes("/macros/s/") ||
+      !parsedUrl.pathname.endsWith("/exec") ||
+      parsedUrl.searchParams.get("bridge") !== "1"
+    ) {
+      throw new Error("Invalid Apps Script bridge deployment URL.");
+    }
+  } catch {
+    return Promise.reject(
+      new Error("Invalid VITE_APPS_SCRIPT_BRIDGE_URL configuration.")
+    );
+  }
+
+  bridgeFramePromise = new Promise<HTMLIFrameElement>(
+    (resolve, reject) => {
+      const frame = document.createElement("iframe");
+
+      frame.title = "KOOKAL Backend Connection";
+      frame.setAttribute("aria-hidden", "true");
+      frame.tabIndex = -1;
+
+      frame.style.position = "fixed";
+      frame.style.width = "1px";
+      frame.style.height = "1px";
+      frame.style.left = "-10000px";
+      frame.style.bottom = "0";
+      frame.style.border = "0";
+      frame.style.visibility = "hidden";
+
+      let settled = false;
+
+      const loadTimeout = setTimeout(() => {
+        if (settled) return;
+
+        settled = true;
+        frame.remove();
+        bridgeFrame = null;
+        bridgeFramePromise = null;
+
+        reject(
+          new AxiosError(
+            "KOOKAL Apps Script bridge failed to load.",
+            AxiosError.ETIMEDOUT
+          )
+        );
+      }, BRIDGE_LOAD_TIMEOUT);
+
+      frame.onload = () => {
+        if (settled) return;
+
+        settled = true;
+        clearTimeout(loadTimeout);
+
+        bridgeFrame = frame;
+        resolve(frame);
+      };
+
+      frame.onerror = () => {
+        if (settled) return;
+
+        settled = true;
+        clearTimeout(loadTimeout);
+
+        frame.remove();
+        bridgeFrame = null;
+        bridgeFramePromise = null;
+
+        reject(
+          new Error("Unable to load the KOOKAL Apps Script bridge.")
+        );
+      };
+
+      frame.src = parsedUrl.toString();
+      document.body.appendChild(frame);
+    }
+  );
+
+  return bridgeFramePromise;
+}
+
 function handleBridgeMessage(event: MessageEvent): void {
-  if (event.source !== window.parent) return;
+  if (!bridgeFrame || event.source !== bridgeFrame.contentWindow) {
+    return;
+  }
 
   const message = event.data as BridgeMessage;
 
@@ -108,10 +218,19 @@ function getRequestPayload(
   };
 }
 
-function sendBridgeRequest(
+async function sendBridgeRequest(
   config: InternalAxiosRequestConfig
 ): Promise<AxiosResponse> {
+  const frame = await getBridgeFrame();
+
   return new Promise((resolve, reject) => {
+    const target = frame.contentWindow;
+
+    if (!target) {
+      reject(new Error("KOOKAL bridge window is unavailable."));
+      return;
+    }
+
     const requestId =
       "kookal_" +
       Date.now().toString(36) +
@@ -167,16 +286,22 @@ function sendBridgeRequest(
       timeout,
     });
 
-    window.parent.postMessage(
-      {
-        type: "KOOKAL_BRIDGE_REQUEST",
-        id: requestId,
-        method: (config.method || "GET").toUpperCase(),
-        path,
-        payload,
-      },
-      "*"
-    );
+    try {
+      target.postMessage(
+        {
+          type: "KOOKAL_BRIDGE_REQUEST",
+          id: requestId,
+          method: (config.method || "GET").toUpperCase(),
+          path,
+          payload,
+        },
+        "*"
+      );
+    } catch (error) {
+      clearTimeout(timeout);
+      pendingRequests.delete(requestId);
+      reject(error);
+    }
   });
 }
 
@@ -188,7 +313,7 @@ export const api = axios.create(
   import.meta.env.PROD
     ? {
         adapter: bridgeAdapter,
-        timeout: BRIDGE_TIMEOUT,
+        timeout: BRIDGE_TIMEOUT + BRIDGE_LOAD_TIMEOUT,
       }
     : {
         baseURL: "/api",

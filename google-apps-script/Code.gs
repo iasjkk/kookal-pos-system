@@ -74,8 +74,19 @@ const KOOKAL = {
    ENTRY POINTS
 ========================= */
 
-function doGet() {
-  return json_({ ok: true, service: "KOOKAL POS API", message: "Use the signed gateway." });
+function doGet(e) {
+  if (e && e.parameter && e.parameter.bridge === "1") {
+    return HtmlService
+      .createHtmlOutputFromFile("Bridge")
+      .setTitle("KOOKAL POS Connection")
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  }
+
+  return json_({
+    ok: true,
+    service: "KOOKAL POS API",
+    message: "KOOKAL backend is running."
+  });
 }
 
 function doPost(e) {
@@ -98,6 +109,35 @@ function doPost(e) {
     const message = err && err.message ? err.message : "Internal server error";
     const status = err && err.httpStatus ? err.httpStatus : 500;
     return json_({ status: status, body: { error: message } });
+  }
+}
+
+function bridgeDispatch(method, path, payload) {
+  try {
+    method = String(method || "GET").toUpperCase();
+    path = normalizePath_(path || "");
+    payload = payload || {};
+
+    if (!["GET", "POST", "PATCH"].includes(method)) {
+      throw httpError_(405, "Method not allowed.");
+    }
+
+    const result = dispatch_(method, path, payload);
+
+    return {
+      status: 200,
+      body: result
+    };
+
+  } catch (err) {
+    return {
+      status: err && err.httpStatus ? err.httpStatus : 500,
+      body: {
+        error: err && err.message
+          ? err.message
+          : "Internal server error."
+      }
+    };
   }
 }
 
@@ -932,42 +972,46 @@ function requiredProperty_(name) {
  * Passwords are stored as a salt and derived hash, never plaintext.
  */
 
+
 function passwordHash_(password, salt) {
   const iterations = KOOKAL.pbkdf2Iterations;
 
-  function hexToBytes(hex) {
-    const bytes = [];
-    for (let i = 0; i < hex.length; i += 2) {
-      bytes.push(parseInt(hex.substring(i, i + 2), 16));
-    }
-    return bytes;
-  }
+  const passwordBytes = Utilities.newBlob(
+    String(password),
+    "text/plain"
+  ).getBytes();
 
-  function bytesToHex(bytes) {
-    return bytes.map(b =>
-      ("0" + ((b + 256) % 256).toString(16)).slice(-2)
-    ).join("");
-  }
+  const saltBytes = Utilities.newBlob(
+    String(salt),
+    "text/plain"
+  ).getBytes();
 
-  function hmacHex(key, message) {
-    const bytes = Utilities.computeHmacSha256Signature(message, key);
-    return bytesToHex(bytes);
-  }
+  // PBKDF2 block index 1: INT_32_BE(1)
+  const block = saltBytes.concat([0, 0, 0, 1]);
 
-  let uHex = hmacHex(password, salt + "\u0000\u0000\u0000\u0001");
-  let result = hexToBytes(uHex);
+  // U1 = PRF(password, salt || INT_32_BE(1))
+  let u = Utilities.computeHmacSha256Signature(
+    block,
+    passwordBytes
+  );
 
+  const result = u.slice();
+
+  // T1 = U1 XOR U2 XOR ... XOR Uc
   for (let i = 1; i < iterations; i++) {
-    uHex = hmacHex(password, uHex);
-    const u = hexToBytes(uHex);
+    u = Utilities.computeHmacSha256Signature(
+      u,
+      passwordBytes
+    );
 
     for (let j = 0; j < result.length; j++) {
-      result[j] ^= u[j];
+      result[j] = (result[j] ^ u[j]);
     }
   }
 
   return Utilities.base64Encode(result);
 }
+
 
 
 function sha256Hex_(text) {
