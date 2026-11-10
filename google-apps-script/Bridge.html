@@ -13,20 +13,26 @@
     (function () {
       "use strict";
 
+      // Your React application's GitHub Pages origin
       var ALLOWED_APP_ORIGIN = "https://iasjkk.github.io";
 
       window.addEventListener("message", function (event) {
+        // Accept messages only from the parent window
         if (event.source !== window.parent) return;
+
+        // Verify the parent application's origin
         if (event.origin !== ALLOWED_APP_ORIGIN) return;
 
         var message = event.data || {};
 
+        // Validate the request message
         if (message.type !== "KOOKAL_BRIDGE_REQUEST") return;
-        if (!message.id || typeof message.id !== "string") return;
+        if (typeof message.id !== "string" || !message.id) return;
 
         var method = String(message.method || "GET").toUpperCase();
         var path = String(message.path || "");
 
+        // Allow only supported HTTP methods
         if (!["GET", "POST", "PATCH"].includes(method)) {
           sendResponse(message.id, 405, {
             error: "Method not allowed."
@@ -34,6 +40,15 @@
           return;
         }
 
+        // Validate API path
+        if (!path || path.startsWith("//")) {
+          sendResponse(message.id, 400, {
+            error: "Invalid API path."
+          });
+          return;
+        }
+
+        // Validate request payload
         var payload = message.payload || {};
 
         if (
@@ -47,6 +62,7 @@
           return;
         }
 
+        // Execute the request through Google Apps Script
         google.script.run
           .withSuccessHandler(function (result) {
             sendResponse(
@@ -65,6 +81,7 @@
           .bridgeDispatch(method, path, payload);
       });
 
+      // Send the response back to the React application
       function sendResponse(id, status, body) {
         window.parent.postMessage(
           {
