@@ -12,6 +12,8 @@ Open PowerShell in this folder:
 
 ```powershell
 npm install
+Copy-Item server/.env.example server/.env
+# Edit server/.env and set strong values for JWT_SECRET and INITIAL_ADMIN_PASSWORD
 npm run dev
 ```
 
@@ -21,8 +23,9 @@ npm run dev
 
 ## First login
 - Username: `admin`
+- Password: the value you set for `INITIAL_ADMIN_PASSWORD` in `server/.env`
 
-Change this password immediately after first login. Create individual Manager and Cashier accounts from **Users**.
+The administrator is created only when the database has no users. Change the password after first login and create individual Manager and Cashier accounts from **Users**.
 
 ## USB thermal printing
 The receipt is laid out for 80mm paper. Click **Pay & Print** or **Reprint** and choose your installed USB thermal printer in the Windows print dialog. In printer preferences, set paper width to 80mm, margins to None/Minimum, scale to 100%, and disable browser headers/footers.

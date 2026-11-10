@@ -1,25 +1,15 @@
-@'
+# Dependencies
 node_modules/
+
+# Build output
 dist/
 build/
 coverage/
+
+# Environment files
 .env
 .env.*
 !.env.example
-.clasp.json
-.clasprc.json
-*.db
-*.sqlite
-*.sqlite3
-*.log
-logs/
-backups/
-BACKUPS/
-.DS_Store
-Thumbs.db
-'@ | Set-Content "$target\.gitignore"
-
-@'
 
 # Local databases and SQLite files
 server/data/
@@ -32,7 +22,14 @@ server/data/
 # TypeScript generated files
 *.tsbuildinfo
 
+# Logs
+*.log
+logs/
+
 # Local Google Apps Script configuration
 .clasp.json
 .clasprc.json
-'@ | Add-Content .gitignore
+
+# OS files
+.DS_Store
+Thumbs.db

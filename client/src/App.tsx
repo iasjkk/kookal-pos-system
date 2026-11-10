@@ -1,7 +1,7 @@
 import {useEffect,useMemo,useState} from "react";
 import {api,money,today} from "./api";
 import {LayoutDashboard,Receipt,Utensils,Users,ChartNoAxesCombined,LogOut,Plus,Printer,Trash2,Search,Leaf,Menu as MenuIcon,X,RefreshCw,ShieldCheck,Clock3} from "lucide-react";
-const logoUrl = `${import.meta.env.BASE_URL}kookal-logo.png`;
+import logoUrl from "./assets/kookal-logo.png";
 type User={id:number;username:string;full_name:string;role:"admin"|"manager"|"cashier"};
 type Item={id:number;category_id:number;category_name:string;meal_period_id:number;name:string;description:string;price:number;gst_rate:number;gst_inclusive:number};
 type Bill={id:number;bill_no:string;customer_name:string;order_type:string;table_no:string;subtotal:number;discount:number;tax_total:number;grand_total:number;payment_method:string;status:string;created_at:string;items:any[];cashier_name:string;cancel_reason?:string};

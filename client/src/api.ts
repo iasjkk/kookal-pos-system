@@ -6,186 +6,19 @@ import axios, {
   InternalAxiosRequestConfig,
 } from "axios";
 
-const BRIDGE_TIMEOUT = 30000;
-const BRIDGE_LOAD_TIMEOUT = 25000;
+const API_TIMEOUT = 30000;
 
-const BRIDGE_URL = String(
-  import.meta.env.VITE_APPS_SCRIPT_BRIDGE_URL || ""
-).trim();
-
-type BridgeMessage = {
-  type: string;
-  id?: string;
-  method?: string;
-  path?: string;
-  payload?: Record<string, unknown>;
+type AppsScriptResult = {
   status?: number;
   body?: unknown;
 };
-
-type PendingRequest = {
-  resolve: (response: AxiosResponse) => void;
-  reject: (error: unknown) => void;
-  config: InternalAxiosRequestConfig;
-  timeout: ReturnType<typeof setTimeout>;
-};
-
-const pendingRequests = new Map<string, PendingRequest>();
-
-let bridgeFrame: HTMLIFrameElement | null = null;
-let bridgeFramePromise: Promise<HTMLIFrameElement> | null = null;
-
-function getBridgeFrame(): Promise<HTMLIFrameElement> {
-  if (bridgeFramePromise) {
-    return bridgeFramePromise;
-  }
-
-  if (!BRIDGE_URL) {
-    return Promise.reject(
-      new Error(
-        "Apps Script bridge URL is missing. Configure VITE_APPS_SCRIPT_BRIDGE_URL."
-      )
-    );
-  }
-
-  let parsedUrl: URL;
-
-  try {
-    parsedUrl = new URL(BRIDGE_URL);
-
-    if (
-      parsedUrl.protocol !== "https:" ||
-      parsedUrl.hostname !== "script.google.com" ||
-      !parsedUrl.pathname.includes("/macros/s/") ||
-      !parsedUrl.pathname.endsWith("/exec") ||
-      parsedUrl.searchParams.get("bridge") !== "1"
-    ) {
-      throw new Error("Invalid Apps Script bridge deployment URL.");
-    }
-  } catch {
-    return Promise.reject(
-      new Error("Invalid VITE_APPS_SCRIPT_BRIDGE_URL configuration.")
-    );
-  }
-
-  bridgeFramePromise = new Promise<HTMLIFrameElement>(
-    (resolve, reject) => {
-      const frame = document.createElement("iframe");
-
-      frame.title = "KOOKAL Backend Connection";
-      frame.setAttribute("aria-hidden", "true");
-      frame.tabIndex = -1;
-
-      frame.style.position = "fixed";
-      frame.style.width = "1px";
-      frame.style.height = "1px";
-      frame.style.left = "-10000px";
-      frame.style.bottom = "0";
-      frame.style.border = "0";
-      frame.style.visibility = "hidden";
-
-      let settled = false;
-
-      const loadTimeout = setTimeout(() => {
-        if (settled) return;
-
-        settled = true;
-        frame.remove();
-        bridgeFrame = null;
-        bridgeFramePromise = null;
-
-        reject(
-          new AxiosError(
-            "KOOKAL Apps Script bridge failed to load.",
-            AxiosError.ETIMEDOUT
-          )
-        );
-      }, BRIDGE_LOAD_TIMEOUT);
-
-      frame.onload = () => {
-        if (settled) return;
-
-        settled = true;
-        clearTimeout(loadTimeout);
-
-        bridgeFrame = frame;
-        resolve(frame);
-      };
-
-      frame.onerror = () => {
-        if (settled) return;
-
-        settled = true;
-        clearTimeout(loadTimeout);
-
-        frame.remove();
-        bridgeFrame = null;
-        bridgeFramePromise = null;
-
-        reject(
-          new Error("Unable to load the KOOKAL Apps Script bridge.")
-        );
-      };
-
-      frame.src = parsedUrl.toString();
-      document.body.appendChild(frame);
-    }
-  );
-
-  return bridgeFramePromise;
-}
-
-function handleBridgeMessage(event: MessageEvent): void {
-  if (!bridgeFrame || event.source !== bridgeFrame.contentWindow) {
-    return;
-  }
-
-  const message = event.data as BridgeMessage;
-
-  if (!message || typeof message !== "object") return;
-  if (message.type !== "KOOKAL_BRIDGE_RESPONSE" || !message.id) return;
-
-  const pending = pendingRequests.get(message.id);
-
-  if (!pending) return;
-
-  clearTimeout(pending.timeout);
-  pendingRequests.delete(message.id);
-
-  const response: AxiosResponse = {
-    data: message.body,
-    status: Number(message.status || 200),
-    statusText: "",
-    headers: {},
-    config: pending.config,
-  };
-
-  if (response.status >= 200 && response.status < 300) {
-    pending.resolve(response);
-  } else {
-    pending.reject(
-      new AxiosError(
-        (message.body as { error?: string })?.error ||
-          "KOOKAL API request failed.",
-        response.status === 401
-          ? AxiosError.ERR_BAD_REQUEST
-          : AxiosError.ERR_BAD_RESPONSE,
-        pending.config,
-        undefined,
-        response
-      )
-    );
-  }
-}
-
-window.addEventListener("message", handleBridgeMessage);
 
 function getRequestPayload(
   config: InternalAxiosRequestConfig
 ): Record<string, unknown> {
   let payload: Record<string, unknown> = {};
 
-  if (config.data) {
+  if (config.data !== undefined && config.data !== null) {
     try {
       payload =
         typeof config.data === "string"
@@ -200,124 +33,169 @@ function getRequestPayload(
     throw new Error("Invalid API request payload.");
   }
 
-  const headers = config.headers;
-
   const authorization =
-    headers?.get?.("Authorization") ||
-    headers?.Authorization ||
-    headers?.authorization;
+    config.headers?.get?.("Authorization") ||
+    config.headers?.Authorization ||
+    config.headers?.authorization;
 
   const token =
     typeof authorization === "string"
       ? authorization.replace(/^Bearer\s+/i, "")
       : localStorage.getItem("kookal_token");
 
-  return {
-    ...payload,
-    ...(token ? { token } : {}),
-  };
+  const result = { ...payload };
+
+  if (token) {
+    result.token = token;
+  }
+
+  if (config.params) {
+    Object.entries(config.params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        result[key] = value;
+      }
+    });
+  }
+
+  return result;
 }
 
-async function sendBridgeRequest(
+function sendAppsScriptRequest(
   config: InternalAxiosRequestConfig
 ): Promise<AxiosResponse> {
-  const frame = await getBridgeFrame();
-
   return new Promise((resolve, reject) => {
-    const target = frame.contentWindow;
+    const appsScript = (window as any).google?.script?.run;
 
-    if (!target) {
-      reject(new Error("KOOKAL bridge window is unavailable."));
-      return;
-    }
-
-    const requestId =
-      "kookal_" +
-      Date.now().toString(36) +
-      "_" +
-      Math.random().toString(36).slice(2);
-
-    let requestUrl: URL;
-
-    try {
-      requestUrl = new URL(config.url || "/", window.location.origin);
-    } catch {
-      reject(new Error("Invalid API request URL."));
-      return;
-    }
-
-    const path = requestUrl.pathname;
-    const params = new URLSearchParams();
-
-    if (config.params) {
-      Object.entries(config.params).forEach(([key, value]) => {
-        if (value !== undefined && value !== null) {
-          params.set(key, String(value));
-        }
-      });
-    }
-
-    requestUrl.searchParams.forEach((value, key) => {
-      params.set(key, value);
-    });
-
-    const payload = getRequestPayload(config);
-
-    params.forEach((value, key) => {
-      payload[key] = value;
-    });
-
-    const timeout = setTimeout(() => {
-      pendingRequests.delete(requestId);
-
+    if (!appsScript) {
       reject(
         new AxiosError(
-          "KOOKAL API request timed out.",
+          "KOOKAL must be opened using its Google Apps Script web app URL.",
+          AxiosError.ERR_NETWORK,
+          config
+        )
+      );
+      return;
+    }
+
+    const method = (config.method || "GET").toUpperCase();
+
+    if (!["GET", "POST", "PATCH"].includes(method)) {
+      reject(
+        new AxiosError(
+          `Unsupported API method: ${method}`,
+          AxiosError.ERR_BAD_REQUEST,
+          config
+        )
+      );
+      return;
+    }
+
+    const path = config.url || "/";
+
+    let payload: Record<string, unknown>;
+
+    try {
+      payload = getRequestPayload(config);
+    } catch (error: any) {
+      reject(
+        new AxiosError(
+          error.message || "Invalid API request payload.",
+          AxiosError.ERR_BAD_REQUEST,
+          config
+        )
+      );
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      reject(
+        new AxiosError(
+          "KOOKAL API request timed out. Please try again.",
           AxiosError.ETIMEDOUT,
           config
         )
       );
-    }, BRIDGE_TIMEOUT);
+    }, API_TIMEOUT);
 
-    pendingRequests.set(requestId, {
-      resolve,
-      reject,
-      config,
-      timeout,
-    });
+    const finish = (
+      result: AppsScriptResult | null | undefined
+    ) => {
+      clearTimeout(timeout);
+
+      const status = Number(result?.status || 200);
+
+      const response: AxiosResponse = {
+        data: result?.body,
+        status,
+        statusText: "",
+        headers: {},
+        config,
+      };
+
+      if (status >= 200 && status < 300) {
+        resolve(response);
+        return;
+      }
+
+      const message =
+        (result?.body as { error?: string })?.error ||
+        "KOOKAL API request failed.";
+
+      reject(
+        new AxiosError(
+          message,
+          status === 401
+            ? AxiosError.ERR_BAD_REQUEST
+            : AxiosError.ERR_BAD_RESPONSE,
+          config,
+          undefined,
+          response
+        )
+      );
+    };
 
     try {
-      target.postMessage(
-        {
-          type: "KOOKAL_BRIDGE_REQUEST",
-          id: requestId,
-          method: (config.method || "GET").toUpperCase(),
-          path,
-          payload,
-        },
-        "*"
-      );
-    } catch (error) {
+      appsScript
+        .withSuccessHandler(finish)
+        .withFailureHandler((error: any) => {
+          clearTimeout(timeout);
+
+          reject(
+            new AxiosError(
+              error?.message || "Google Apps Script request failed.",
+              AxiosError.ERR_BAD_RESPONSE,
+              config
+            )
+          );
+        })
+        .bridgeDispatch(method, path, payload);
+    } catch (error: any) {
       clearTimeout(timeout);
-      pendingRequests.delete(requestId);
-      reject(error);
+
+      reject(
+        new AxiosError(
+          error?.message || "Unable to call the KOOKAL backend.",
+          AxiosError.ERR_NETWORK,
+          config
+        )
+      );
     }
   });
 }
 
-const bridgeAdapter: AxiosAdapter = async (config) => {
-  return sendBridgeRequest(config);
+const appsScriptAdapter: AxiosAdapter = async (config) => {
+  return sendAppsScriptRequest(config);
 };
 
 export const api = axios.create(
   import.meta.env.PROD
     ? {
-        adapter: bridgeAdapter,
-        timeout: BRIDGE_TIMEOUT + BRIDGE_LOAD_TIMEOUT,
+        adapter: appsScriptAdapter,
+        timeout: API_TIMEOUT,
       }
     : {
         baseURL: "/api",
-        timeout: BRIDGE_TIMEOUT,
+        timeout: API_TIMEOUT,
       }
 );
 

@@ -2,17 +2,16 @@ import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import dotenv from "dotenv";
 import { z } from "zod";
 import { db } from "./db.js";
+
+dotenv.config();
 
 const app = express();
 app.use(cors({ origin: "http://localhost:5173" }));
 app.use(express.json({ limit: "1mb" }));
 const JWT_SECRET: string = process.env.JWT_SECRET ?? "";
-
-if (!JWT_SECRET) {
-  throw new Error("JWT_SECRET environment variable is required");
-}
 
 if (!JWT_SECRET) {
   throw new Error("JWT_SECRET environment variable is required");
