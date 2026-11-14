@@ -8,7 +8,7 @@ import axios, {
 
 const API_TIMEOUT = 30000;
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+const API_BASE_URL = import.meta.env.VITE_APPS_SCRIPT_BRIDGE_URL;
 
 type AppsScriptResult = {
   status?: number;
