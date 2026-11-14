@@ -1,9 +1,14 @@
+
 {
   "name": "kookal-pos-client",
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "scripts": { "dev": "vite --host 0.0.0.0", "build": "tsc -b && vite build" },
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -b && vite build",
+    "build:gas": "tsc -b && vite build --config vite.config.gas.ts"
+  },
   "dependencies": {
     "axios": "^1.7.9",
     "lucide-react": "^0.468.0",
@@ -15,6 +20,7 @@
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "~5.7.2",
-    "vite": "^6.0.7"
+    "vite": "^6.0.7",
+    "vite-plugin-singlefile": "^2.3.0"
   }
 }

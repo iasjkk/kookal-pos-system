@@ -75,18 +75,30 @@ const KOOKAL = {
 ========================= */
 
 function doGet(e) {
-  if (e && e.parameter && e.parameter.bridge === "1") {
+  const params = (e && e.parameter) ? e.parameter : {};
+
+  // Keep the old iframe bridge available temporarily as a fallback.
+  if (params.bridge === "1") {
     return HtmlService
       .createHtmlOutputFromFile("Bridge")
       .setTitle("KOOKAL POS Connection")
       .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
   }
 
-  return json_({
-    ok: true,
-    service: "KOOKAL POS API",
-    message: "KOOKAL backend is running."
-  });
+  // Retain a simple health-check endpoint.
+  if (params.health === "1") {
+    return json_({
+      ok: true,
+      service: "KOOKAL POS API",
+      message: "KOOKAL backend is running."
+    });
+  }
+
+  // Serve the React application by default.
+  return HtmlService
+    .createHtmlOutputFromFile("Index")
+    .setTitle("KOOKAL | Farm & Kitchen POS")
+    .addMetaTag("viewport", "width=device-width, initial-scale=1");
 }
 
 function doPost(e) {

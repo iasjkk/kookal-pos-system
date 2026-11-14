@@ -8,125 +8,36 @@ import axios, {
 
 const API_TIMEOUT = 30000;
 
-const API_BASE_URL = import.meta.env.VITE_APPS_SCRIPT_BRIDGE_URL;
-
 type AppsScriptResult = {
   status?: number;
   body?: unknown;
 };
 
-type BridgeResponse = {
-  type: "KOOKAL_BRIDGE_RESPONSE";
-  id: string;
-  status?: number;
-  body?: unknown;
+type AppsScriptRunner = {
+  withSuccessHandler(
+    callback: (result: AppsScriptResult) => void
+  ): AppsScriptRunner;
+
+  withFailureHandler(
+    callback: (error: Error) => void
+  ): AppsScriptRunner;
+
+  bridgeDispatch(
+    method: string,
+    path: string,
+    payload: Record<string, unknown>
+  ): void;
 };
 
-type PendingRequest = {
-  resolve: (result: AppsScriptResult) => void;
-  reject: (error: Error) => void;
-  timeout: ReturnType<typeof setTimeout>;
-};
-
-let bridgeFrame: HTMLIFrameElement | null = null;
-let bridgeReady: Promise<void> | null = null;
-
-const pendingRequests = new Map<string, PendingRequest>();
-
-let requestCounter = 0;
-
-function getBridgeUrl(): string {
-  if (!API_BASE_URL) {
-    throw new Error("VITE_API_BASE_URL is not configured.");
-  }
-
-  const url = new URL(API_BASE_URL);
-
-  url.searchParams.set("bridge", "1");
-
-  return url.toString();
-}
-
-function initializeBridge(): Promise<void> {
-  if (bridgeReady) {
-    return bridgeReady;
-  }
-
-  const readyPromise = new Promise<void>((resolve, reject) => {
-    const iframe = document.createElement("iframe");
-
-    iframe.src = getBridgeUrl();
-    iframe.title = "KOOKAL Apps Script Bridge";
-    iframe.style.display = "none";
-    iframe.setAttribute("aria-hidden", "true");
-
-    const timeout = setTimeout(() => {
-      iframe.remove();
-      bridgeReady = null;
-
-      reject(
-        new Error("Unable to load KOOKAL Apps Script bridge.")
-      );
-    }, API_TIMEOUT);
-
-    iframe.onload = () => {
-      clearTimeout(timeout);
-
-      bridgeFrame = iframe;
-      resolve();
+declare global {
+  interface Window {
+    google?: {
+      script?: {
+        run: AppsScriptRunner;
+      };
     };
-
-    iframe.onerror = () => {
-      clearTimeout(timeout);
-
-      iframe.remove();
-      bridgeFrame = null;
-      bridgeReady = null;
-
-      reject(
-        new Error("Failed to load KOOKAL Apps Script bridge.")
-      );
-    };
-
-    document.body.appendChild(iframe);
-  });
-
-  bridgeReady = readyPromise;
-
-  return readyPromise;
+  }
 }
-
-// Receive responses from the Apps Script iframe
-window.addEventListener("message", (event: MessageEvent) => {
-  // Validate the actual iframe window, not its redirected origin
-  if (!bridgeFrame || event.source !== bridgeFrame.contentWindow) {
-    return;
-  }
-
-  const response = event.data as BridgeResponse;
-
-  if (
-    !response ||
-    response.type !== "KOOKAL_BRIDGE_RESPONSE" ||
-    typeof response.id !== "string"
-  ) {
-    return;
-  }
-
-  const pending = pendingRequests.get(response.id);
-
-  if (!pending) {
-    return;
-  }
-
-  clearTimeout(pending.timeout);
-  pendingRequests.delete(response.id);
-
-  pending.resolve({
-    status: response.status,
-    body: response.body,
-  });
-});
 
 function getRequestPayload(
   config: InternalAxiosRequestConfig
@@ -179,6 +90,19 @@ function getRequestPayload(
   return result;
 }
 
+function getAppsScriptRunner(): AppsScriptRunner {
+  const runner = window.google?.script?.run;
+
+  if (!runner) {
+    throw new Error(
+      "Google Apps Script runtime is unavailable. " +
+      "Open KOOKAL POS using its Apps Script Web App URL."
+    );
+  }
+
+  return runner;
+}
+
 async function sendAppsScriptRequest(
   config: InternalAxiosRequestConfig
 ): Promise<AxiosResponse> {
@@ -206,43 +130,52 @@ async function sendAppsScriptRequest(
     );
   }
 
+  const path = config.url || "/";
+
   let result: AppsScriptResult;
 
   try {
-    await initializeBridge();
+    const runner = getAppsScriptRunner();
 
-    if (!bridgeFrame?.contentWindow) {
-      throw new Error("KOOKAL Apps Script bridge is unavailable.");
-    }
+    result = await new Promise<AppsScriptResult>(
+      (resolve, reject) => {
+        let completed = false;
 
-    const id = `kookal-${Date.now()}-${++requestCounter}`;
+        const timeout = setTimeout(() => {
+          if (completed) return;
 
-    result = await new Promise<AppsScriptResult>((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        pendingRequests.delete(id);
+          completed = true;
 
-        reject(
-          new Error("KOOKAL API request timed out. Please try again.")
-        );
-      }, API_TIMEOUT);
+          reject(
+            new Error(
+              "KOOKAL API request timed out. Please try again."
+            )
+          );
+        }, API_TIMEOUT);
 
-      pendingRequests.set(id, {
-        resolve,
-        reject,
-        timeout,
-      });
+        runner
+          .withSuccessHandler((response) => {
+            if (completed) return;
 
-      bridgeFrame!.contentWindow!.postMessage(
-        {
-          type: "KOOKAL_BRIDGE_REQUEST",
-          id,
-          method,
-          path: config.url || "/",
-          payload,
-        },
-        "*"
-      );
-    });
+            completed = true;
+            clearTimeout(timeout);
+            resolve(response || {});
+          })
+          .withFailureHandler((error) => {
+            if (completed) return;
+
+            completed = true;
+            clearTimeout(timeout);
+
+            reject(
+              error instanceof Error
+                ? error
+                : new Error("Apps Script request failed.")
+            );
+          })
+          .bridgeDispatch(method, path, payload);
+      }
+    );
   } catch (error: unknown) {
     throw new AxiosError(
       error instanceof Error

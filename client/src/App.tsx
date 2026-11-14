@@ -156,6 +156,12 @@ function Login({ onLogin }: { onLogin: (t: string, u: User) => void }) {
       </div>
 
       <div className="login-art">
+        <img
+            className="login-art-logo"
+            src={logoUrl}
+            alt=""
+            aria-hidden="true"
+        />
         <div className="art-copy">
           <span>FROM FARM TO TABLE</span>
           <h2>
