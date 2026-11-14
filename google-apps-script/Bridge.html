@@ -13,42 +13,76 @@
     (function () {
       "use strict";
 
-      // Your React application's GitHub Pages origin
-      var ALLOWED_APP_ORIGIN = "https://iasjkk.github.io";
+      var ALLOWED_ORIGINS = [
+        "https://iasjkk.github.io"
+      ];
 
       window.addEventListener("message", function (event) {
-        // Accept messages only from the parent window
-        if (event.source !== window.parent) return;
 
-        // Verify the parent application's origin
-        if (event.origin !== ALLOWED_APP_ORIGIN) return;
+        // Accept messages only from the actual parent window.
+        if (event.source !== window.parent) {
+          return;
+        }
+
+        // Validate the sender's origin.
+        if (!ALLOWED_ORIGINS.includes(event.origin)) {
+          console.warn("KOOKAL Bridge: Origin rejected:", event.origin);
+          return;
+        }
 
         var message = event.data || {};
 
-        // Validate the request message
-        if (message.type !== "KOOKAL_BRIDGE_REQUEST") return;
-        if (typeof message.id !== "string" || !message.id) return;
+        // Validate message type and request ID.
+        if (message.type !== "KOOKAL_BRIDGE_REQUEST") {
+          return;
+        }
 
-        var method = String(message.method || "GET").toUpperCase();
-        var path = String(message.path || "");
+        if (
+          typeof message.id !== "string" ||
+          !message.id
+        ) {
+          return;
+        }
 
-        // Allow only supported HTTP methods
+        var requestId = message.id;
+        var responseOrigin = event.origin;
+
+        var method = String(
+          message.method || "GET"
+        ).toUpperCase();
+
+        var path = String(
+          message.path || ""
+        );
+
+        // Validate HTTP method.
         if (!["GET", "POST", "PATCH"].includes(method)) {
-          sendResponse(message.id, 405, {
-            error: "Method not allowed."
-          });
+          sendResponse(
+            requestId,
+            responseOrigin,
+            405,
+            { error: "Method not allowed." }
+          );
           return;
         }
 
-        // Validate API path
-        if (!path || path.startsWith("//")) {
-          sendResponse(message.id, 400, {
-            error: "Invalid API path."
-          });
+        // Validate API path.
+        if (
+          !path ||
+          path.startsWith("//") ||
+          path.startsWith("http://") ||
+          path.startsWith("https://")
+        ) {
+          sendResponse(
+            requestId,
+            responseOrigin,
+            400,
+            { error: "Invalid API path." }
+          );
           return;
         }
 
-        // Validate request payload
+        // Validate payload.
         var payload = message.payload || {};
 
         if (
@@ -56,33 +90,81 @@
           payload === null ||
           Array.isArray(payload)
         ) {
-          sendResponse(message.id, 400, {
-            error: "Invalid request payload."
-          });
+          sendResponse(
+            requestId,
+            responseOrigin,
+            400,
+            { error: "Invalid request payload." }
+          );
           return;
         }
 
-        // Execute the request through Google Apps Script
-        google.script.run
-          .withSuccessHandler(function (result) {
-            sendResponse(
-              message.id,
-              result && result.status ? result.status : 200,
-              result ? result.body : null
+        // Execute Apps Script backend.
+        try {
+          google.script.run
+            .withSuccessHandler(function (result) {
+
+              var status = (
+                result && result.status
+              ) ? result.status : 200;
+
+              var body = (
+                result && result.body !== undefined
+              ) ? result.body : null;
+
+              sendResponse(
+                requestId,
+                responseOrigin,
+                status,
+                body
+              );
+
+            })
+            .withFailureHandler(function (error) {
+
+              sendResponse(
+                requestId,
+                responseOrigin,
+                500,
+                {
+                  error: error && error.message
+                    ? error.message
+                    : "Apps Script request failed."
+                }
+              );
+
+            })
+            .bridgeDispatch(
+              method,
+              path,
+              payload
             );
-          })
-          .withFailureHandler(function (error) {
-            sendResponse(message.id, 500, {
+
+        } catch (error) {
+
+          sendResponse(
+            requestId,
+            responseOrigin,
+            500,
+            {
               error: error && error.message
                 ? error.message
-                : "Apps Script request failed."
-            });
-          })
-          .bridgeDispatch(method, path, payload);
+                : "Unable to execute Apps Script request."
+            }
+          );
+
+        }
+
       });
 
-      // Send the response back to the React application
-      function sendResponse(id, status, body) {
+      // Return response to the verified sender.
+      function sendResponse(
+        id,
+        targetOrigin,
+        status,
+        body
+      ) {
+
         window.parent.postMessage(
           {
             type: "KOOKAL_BRIDGE_RESPONSE",
@@ -90,9 +172,11 @@
             status: status,
             body: body
           },
-          ALLOWED_APP_ORIGIN
+          targetOrigin
         );
+
       }
+
     })();
   </script>
 </body>
