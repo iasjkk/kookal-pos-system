@@ -796,7 +796,9 @@ function billResponse_(id) {
     grand_total: Number(b.grand_total || 0),
     payment_method: b.payment_method || "",
     status: b.bill_status || "PAID",
-    created_at: b.created_at,
+    created_at: b.created_at instanceof Date
+      ? b.created_at.toISOString()
+      : String(b.created_at || ""),
     items: items,
     cashier_name: cashier ? (cashier.full_name || cashier.username) : ""
   };

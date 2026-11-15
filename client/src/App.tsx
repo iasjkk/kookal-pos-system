@@ -188,7 +188,68 @@ function POS({user,notify,onCreated}:{user:User;notify:(s:string)=>void;onCreate
  const subtotal=cart.reduce((s,x)=>{const gross=x.item.price*x.qty;return s+(x.item.gst_inclusive?gross-gross*x.item.gst_rate/(100+x.item.gst_rate):gross)},0);
  const tax=cart.reduce((s,x)=>s+(x.item.gst_inclusive?x.item.price*x.qty*x.item.gst_rate/(100+x.item.gst_rate):x.item.price*x.qty*x.item.gst_rate/100),0);
  const total=cart.reduce((s,x)=>s+x.item.price*x.qty*(x.item.gst_inclusive?1:1+x.item.gst_rate/100),0)-Math.min(Number(discount)||0,subtotal);
- async function pay(){if(!cart.length)return notify("Add at least one item");const printWindow=window.open("about:blank","_blank","width=420,height=700");setBusy(true);try{const r=await api.post("/bills",{customer_name:customer,order_type:orderType,table_no:table,payment_method:payment,discount:Number(discount)||0,items:cart.map(x=>({item_id:x.item.id,quantity:x.qty}))});setCart([]);setDiscount("0");notify(`Bill ${r.data.bill_no} saved. Opening receipt…`);onCreated();if(printWindow)printReceipt(r.data,printWindow);else notify("Bill saved. Allow pop-ups and reprint it from Bills."); }catch(e:any){printWindow?.close();notify(e.response?.data?.error||"Could not save bill")}finally{setBusy(false)}}
+ async function pay() {
+  if (!cart.length) {
+    return notify("Add at least one item");
+  }
+
+  const printWindow = window.open(
+    "about:blank",
+    "_blank",
+    "width=420,height=700"
+  );
+
+  setBusy(true);
+
+  try {
+    console.log("[KOOKAL] Submitting bill...");
+
+    const r = await api.post("/bills", {
+      customer_name: customer,
+      order_type: orderType,
+      table_no: table,
+      payment_method: payment,
+      discount: Number(discount) || 0,
+      items: cart.map(x => ({
+        item_id: x.item.id,
+        quantity: x.qty
+      }))
+    });
+
+    console.log("[KOOKAL] Bill API response:", r);
+    console.log("[KOOKAL] Bill response data:", r.data);
+
+    setCart([]);
+    setDiscount("0");
+
+    notify(`Bill ${r.data.bill_no} saved. Opening receipt…`);
+
+    onCreated();
+
+    if (printWindow) {
+      console.log("[KOOKAL] Generating receipt...");
+      printReceipt(r.data, printWindow);
+      console.log("[KOOKAL] Receipt generation completed.");
+    } else {
+      notify("Bill saved. Allow pop-ups and reprint it from Bills.");
+    }
+
+  } catch (e: any) {
+    console.error("[KOOKAL] Bill/receipt processing error:", e);
+    console.error("[KOOKAL] Error response:", e.response);
+
+    printWindow?.close();
+
+    notify(
+      e.response?.data?.error ||
+      e.message ||
+      "Could not save bill"
+    );
+
+  } finally {
+    setBusy(false);
+  }
+}
  return <div className="pos-layout"><section className="menu-panel"><div className="section-heading"><div><span className="eyebrow">ORDER BUILDER</span><h2>What are we serving?</h2></div><div className="search-box"><Search size={16}/><input placeholder="Find an item…" value={search} onChange={e=>setSearch(e.target.value)}/></div></div><div className="period-tabs">{menu.periods.map((p:any)=><button key={p.id} className={period===p.id?"selected":""} onClick={()=>{setPeriod(p.id);setCategory(null)}}>{p.name}</button>)}</div><div className="category-tabs"><button className={!category?"selected":""} onClick={()=>setCategory(null)}>All items</button>{categories.map((c:any)=><button key={c.id} className={category===c.id?"selected":""} onClick={()=>setCategory(c.id)}>{c.name}</button>)}</div><div className="item-grid">{items.map(item=><button className="item-card" key={item.id} onClick={()=>add(item)}><span className="item-plus"><Plus size={16}/></span><b>{item.name}</b><span>{item.description||item.category_name}</span><strong>{money(item.price)}</strong><small>{item.gst_rate}% GST {item.gst_inclusive?"inclusive":"extra"}</small></button>)}{!items.length&&<div className="empty">No menu items yet. Ask an Admin to add items.</div>}</div></section>
  <aside className="cart-panel"><div className="cart-head"><div><span className="eyebrow">CURRENT ORDER</span><h2>New bill</h2></div><span className="cart-count">{cart.reduce((s,x)=>s+x.qty,0)} items</span></div><div className="order-fields"><select value={orderType} onChange={e=>setOrderType(e.target.value)}><option>Dine-in</option><option>Takeaway</option></select>{orderType==="Dine-in"&&<input placeholder="Table number (optional)" value={table} onChange={e=>setTable(e.target.value)}/>}<input placeholder="Customer name (optional)" value={customer} onChange={e=>setCustomer(e.target.value)}/></div><div className="cart-items">{cart.map(x=><div className="cart-row" key={x.item.id}><div className="cart-item-name"><b>{x.item.name}</b><span>{money(x.item.price)} each</span></div><div className="qty-control"><button onClick={()=>change(x.item.id,x.qty-1)}>−</button><b>{x.qty}</b><button onClick={()=>change(x.item.id,x.qty+1)}>+</button></div><strong>{money(x.item.price*x.qty)}</strong></div>)}{!cart.length&&<div className="cart-empty"><Receipt size={30}/><b>Your order is empty</b><span>Select items to start a bill</span></div>}</div><div className="bill-summary"><div className="summary-line"><span>Subtotal</span><b>{money(subtotal)}</b></div><div className="summary-line"><span>GST (included + extra)</span><b>{money(tax)}</b></div><div className="discount-row"><label>Discount (₹)</label><input type="number" min="0" max={subtotal} value={discount} onChange={e=>setDiscount(e.target.value)}/></div><div className="total-line"><span>Grand total</span><strong>{money(total)}</strong></div><label className="field-label">Payment method</label><div className="payment-tabs">{["Cash","UPI","Card","Other"].map(p=><button className={payment===p?"selected":""} onClick={()=>setPayment(p)} key={p}>{p}</button>)}</div><button className="btn primary full pay-btn" onClick={pay} disabled={!cart.length||busy}><Printer size={17}/>{busy?"Saving bill…":`Pay & Print · ${money(total)}`}</button><button className="text-btn full" onClick={()=>{if(confirm("Clear this order?"))setCart([])}}>Clear order</button></div></aside></div>
 }
@@ -203,7 +264,10 @@ function escapeHtml(s:string){return String(s||"").replace(/[&<>"']/g,c=>({"&":"
 
 function Bills({user,refresh,notify}:{user:User;refresh:number;notify:(s:string)=>void}){
  const [bills,setBills]=useState<Bill[]>([]),[reason,setReason]=useState(""),[cancelId,setCancelId]=useState<number|null>(null),[filter,setFilter]=useState("ALL");
- const load=()=>api.get("/bills").then(r=>setBills(r.data)).catch(()=>notify("Could not load bills"));
+ const load = () =>
+  api.get("/bills")
+    .then(r => setBills(Array.isArray(r.data?.bills) ? r.data.bills : []))
+    .catch(() => notify("Could not load bills"));
  useEffect(()=>{load()},[refresh]);
  const filtered=bills.filter(b=>filter==="ALL"||b.status===filter);
  async function cancel(){if(!cancelId)return;try{await api.post(`/bills/${cancelId}/cancel`,{reason});setCancelId(null);setReason("");notify("Bill cancelled and retained in records");load()}catch(e:any){notify(e.response?.data?.error||"Cancellation failed")}}

@@ -132,6 +132,8 @@ async function sendAppsScriptRequest(
 
   const path = config.url || "/";
 
+  console.log("[KOOKAL API] Request:", method, path);
+
   let result: AppsScriptResult;
 
   try {
@@ -155,6 +157,9 @@ async function sendAppsScriptRequest(
 
         runner
           .withSuccessHandler((response) => {
+            console.log("[KOOKAL API] Raw Apps Script response:", response);
+            console.log("[KOOKAL API] Response type:", typeof response);
+
             if (completed) return;
 
             completed = true;
@@ -162,6 +167,8 @@ async function sendAppsScriptRequest(
             resolve(response || {});
           })
           .withFailureHandler((error) => {
+            console.error("[KOOKAL API] Apps Script failure:", error);
+
             if (completed) return;
 
             completed = true;
