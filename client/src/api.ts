@@ -8,34 +8,31 @@ import axios, {
 
 const API_TIMEOUT = 30000;
 
-type AppsScriptResult = {
-  status?: number;
-  body?: unknown;
+const BRIDGE_URL = import.meta.env.VITE_APPS_SCRIPT_BRIDGE_URL;
+
+type BridgeResponse = {
+  type: "KOOKAL_BRIDGE_RESPONSE";
+  id: string;
+  status: number;
+  body: unknown;
 };
 
-type AppsScriptRunner = {
-  withSuccessHandler(
-    callback: (result: AppsScriptResult) => void
-  ): AppsScriptRunner;
-
-  withFailureHandler(
-    callback: (error: Error) => void
-  ): AppsScriptRunner;
-
-  bridgeDispatch(
-    method: string,
-    path: string,
-    payload: Record<string, unknown>
-  ): void;
+type PendingRequest = {
+  resolve: (response: BridgeResponse) => void;
+  reject: (error: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
 };
 
 declare global {
   interface Window {
-    google?: {
-      script?: {
-        run: AppsScriptRunner;
-      };
-    };
+    __kookalBridgeFrame?: HTMLIFrameElement;
+    __kookalBridgeReady?: Promise<HTMLIFrameElement>;
+    __kookalBridgePending?: Map<string, PendingRequest>;
+    __kookalBridgeListener?: boolean;
+  }
+
+  interface ImportMetaEnv {
+    readonly VITE_APPS_SCRIPT_BRIDGE_URL?: string;
   }
 }
 
@@ -90,17 +87,161 @@ function getRequestPayload(
   return result;
 }
 
-function getAppsScriptRunner(): AppsScriptRunner {
-  const runner = window.google?.script?.run;
-
-  if (!runner) {
+function getBridgeUrl(): string {
+  if (!BRIDGE_URL) {
     throw new Error(
-      "Google Apps Script runtime is unavailable. " +
-      "Open KOOKAL POS using its Apps Script Web App URL."
+      "Apps Script bridge URL is missing. " +
+      "Configure VITE_APPS_SCRIPT_BRIDGE_URL in GitHub."
     );
   }
 
-  return runner;
+  const url = new URL(BRIDGE_URL);
+
+  if (!url.searchParams.has("bridge")) {
+    url.searchParams.set("bridge", "1");
+  }
+
+  return url.toString();
+}
+
+function createBridgeFrame(): Promise<HTMLIFrameElement> {
+  if (window.__kookalBridgeReady) {
+    return window.__kookalBridgeReady;
+  }
+
+  window.__kookalBridgeReady = new Promise(
+    (resolve, reject) => {
+      try {
+        const frame = document.createElement("iframe");
+
+        frame.src = getBridgeUrl();
+        frame.title = "KOOKAL Apps Script Bridge";
+        frame.style.display = "none";
+        frame.setAttribute("aria-hidden", "true");
+
+        const timeout = setTimeout(() => {
+          reject(
+            new Error(
+              "KOOKAL bridge failed to load. Check the Apps Script URL."
+            )
+          );
+        }, API_TIMEOUT);
+
+        frame.onload = () => {
+          clearTimeout(timeout);
+          window.__kookalBridgeFrame = frame;
+          resolve(frame);
+        };
+
+        frame.onerror = () => {
+          clearTimeout(timeout);
+          reject(new Error("Unable to load KOOKAL Apps Script bridge."));
+        };
+
+        document.body.appendChild(frame);
+      } catch (error) {
+        reject(
+          error instanceof Error
+            ? error
+            : new Error("Unable to initialize KOOKAL bridge.")
+        );
+      }
+    }
+  );
+
+  return window.__kookalBridgeReady;
+}
+
+function initializeBridgeListener(): void {
+  if (window.__kookalBridgeListener) return;
+
+  window.__kookalBridgePending =
+    window.__kookalBridgePending || new Map();
+
+  window.addEventListener("message", (event: MessageEvent) => {
+    const frame = window.__kookalBridgeFrame;
+
+    // Accept messages only from our bridge iframe.
+    if (!frame || event.source !== frame.contentWindow) {
+      return;
+    }
+
+    const message = event.data as BridgeResponse;
+
+    if (
+      !message ||
+      message.type !== "KOOKAL_BRIDGE_RESPONSE" ||
+      typeof message.id !== "string"
+    ) {
+      return;
+    }
+
+    const pending = window.__kookalBridgePending?.get(message.id);
+
+    if (!pending) return;
+
+    clearTimeout(pending.timeout);
+    window.__kookalBridgePending?.delete(message.id);
+
+    pending.resolve(message);
+  });
+
+  window.__kookalBridgeListener = true;
+}
+
+function createRequestId(): string {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+async function sendBridgeRequest(
+  method: string,
+  path: string,
+  payload: Record<string, unknown>
+): Promise<BridgeResponse> {
+  const frame = await createBridgeFrame();
+
+  initializeBridgeListener();
+
+  if (!frame.contentWindow) {
+    throw new Error("KOOKAL bridge window is unavailable.");
+  }
+
+  const id = createRequestId();
+
+  const response = await new Promise<BridgeResponse>(
+    (resolve, reject) => {
+      const timeout = setTimeout(() => {
+        window.__kookalBridgePending?.delete(id);
+
+        reject(
+          new Error("KOOKAL API request timed out. Please try again.")
+        );
+      }, API_TIMEOUT);
+
+      window.__kookalBridgePending?.set(id, {
+        resolve,
+        reject,
+        timeout,
+      });
+
+      frame.contentWindow!.postMessage(
+        {
+          type: "KOOKAL_BRIDGE_REQUEST",
+          id,
+          method,
+          path,
+          payload,
+        },
+        "*"
+      );
+    }
+  );
+
+  return response;
 }
 
 async function sendAppsScriptRequest(
@@ -120,7 +261,7 @@ async function sendAppsScriptRequest(
 
   try {
     payload = getRequestPayload(config);
-  } catch (error: unknown) {
+  } catch (error) {
     throw new AxiosError(
       error instanceof Error
         ? error.message
@@ -132,58 +273,15 @@ async function sendAppsScriptRequest(
 
   const path = config.url || "/";
 
-  console.log("[KOOKAL API] Request:", method, path);
+  console.log("[KOOKAL API] Bridge request:", method, path);
 
-  let result: AppsScriptResult;
+  let result: BridgeResponse;
 
   try {
-    const runner = getAppsScriptRunner();
+    result = await sendBridgeRequest(method, path, payload);
+  } catch (error) {
+    console.error("[KOOKAL API] Bridge failure:", error);
 
-    result = await new Promise<AppsScriptResult>(
-      (resolve, reject) => {
-        let completed = false;
-
-        const timeout = setTimeout(() => {
-          if (completed) return;
-
-          completed = true;
-
-          reject(
-            new Error(
-              "KOOKAL API request timed out. Please try again."
-            )
-          );
-        }, API_TIMEOUT);
-
-        runner
-          .withSuccessHandler((response) => {
-            console.log("[KOOKAL API] Raw Apps Script response:", response);
-            console.log("[KOOKAL API] Response type:", typeof response);
-
-            if (completed) return;
-
-            completed = true;
-            clearTimeout(timeout);
-            resolve(response || {});
-          })
-          .withFailureHandler((error) => {
-            console.error("[KOOKAL API] Apps Script failure:", error);
-
-            if (completed) return;
-
-            completed = true;
-            clearTimeout(timeout);
-
-            reject(
-              error instanceof Error
-                ? error
-                : new Error("Apps Script request failed.")
-            );
-          })
-          .bridgeDispatch(method, path, payload);
-      }
-    );
-  } catch (error: unknown) {
     throw new AxiosError(
       error instanceof Error
         ? error.message
@@ -193,19 +291,21 @@ async function sendAppsScriptRequest(
     );
   }
 
-  const status = Number(result?.status || 200);
+  const status = Number(result.status || 200);
 
   const response: AxiosResponse = {
-    data: result?.body,
+    data: result.body,
     status,
     statusText: "",
     headers: {},
     config,
   };
 
+  console.log("[KOOKAL API] Response:", status, result.body);
+
   if (status < 200 || status >= 300) {
     const message =
-      (result?.body as { error?: string })?.error ||
+      (result.body as { error?: string })?.error ||
       "KOOKAL API request failed.";
 
     throw new AxiosError(
